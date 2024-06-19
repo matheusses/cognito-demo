@@ -1,0 +1,12 @@
+.env
+.env.dev
+*.dist-info
+*.pyc
+.python-version
+__pycache__
+bin/
+certifi/
+charset_normalizer/
+idna/
+requests/
+urllib3/
