@@ -60,41 +60,98 @@ class AuthenticationCognitoService:
         return secret_hash
 
 
-    def create_user(self, username, email):
-        response = self._client.admin_create_user(
+    def create_user(self, email, phone_number):
+        client = boto3.client('cognito-idp')
+
+        random_password = self.generate_random_password()
+
+        response = client.admin_create_user(
+            UserPoolId=self._user_pool_id,
+            Username=email,
+            UserAttributes=[
+            {
+                'Name': 'email',
+                'Value': email
+            },
+            {
+                'Name': 'phone_number',
+                'Value': phone_number
+            },
+            {
+                'Name': 'email_verified',
+                'Value': 'true'
+            }, 
+            {
+                'Name': 'phone_number_verified',
+                'Value': 'true'
+            }
+            ],
+            TemporaryPassword=random_password,
+            MessageAction='SUPPRESS'  # Not sending the invitation email/SMS
+            )
+        # Set the user password to the generated password
+        client.admin_set_user_password(
+            UserPoolId=self._user_pool_id,
+            Username=email,
+            Password=random_password,
+            Permanent=True
+        )
+
+        return response
+
+
+    def get_username_by_phone_number(self, phone_number):
+        try:
+            response = self._client.list_users(
+                UserPoolId=self._user_pool_id,
+                Filter=f'phone_number = "{phone_number}"',
+                Limit=1
+            )
+            if response['Users']:
+                username = response['Users'][0]['Username']
+                return username
+            else:
+                print(f"No user found with phone number: {phone_number}")
+                return None
+        except self._client.exceptions.InvalidParameterException as e:
+            print(f"InvalidParameterException: {e}")
+            return None
+        except Exception as e:
+            print(f"An error occurred: {e}")
+            return None
+
+
+    def update_user(self, username, uuid, access):
+        response = self._client.admin_update_user_attributes(
             UserPoolId=self._user_pool_id,
             Username=username,
             UserAttributes=[
-                {'Name': 'email', 'Value': email},
-                {'Name': 'email_verified', 'Value': 'true'}
-            ],
-            DesiredDeliveryMediums=['EMAIL']
+                {'Name': 'phone_number_verified', 'Value': 'true'},
+                {'Name': 'email_verified', 'Value': 'true'},
+                {'Name': 'custom:uuid', 'Value': uuid},
+                {'Name': 'custom:access', 'Value': json.dumps(access)}
+            ]
         )
         print(response)
 
 
-    def initiate_auth(self, username):
-        response = self._client.initiate_auth(
-            AuthFlow='CUSTOM_AUTH',
-            AuthParameters={
-                'USERNAME': username,
-                'SECRET_HASH': self.__get_secret_hash(username)
-            },
-            ClientId=self._client_id
-        )
-        session = response['Session']
-        print("Auth initiated:", session)
-        return session
+    def update_set_user_password(self, username):
+        self._client.admin_set_user_password(
+        UserPoolId=self._user_pool_id,
+        Username=username,
+        Password=self.generate_random_password(),
+        Permanent=True
+    )
 
-    def initiate_auth_login_sms(self, phone_number):
+
+    def initiate_auth(self, user_name):
         response = self._client.initiate_auth(
             AuthFlow='CUSTOM_AUTH',
             AuthParameters={
-                'phoneNumber': phone_number,
-                'challengeName': 'LOGIN_SMS_CHALLENGE',
-                'SECRET_HASH': self.__get_secret_hash(phone_number)
+                'USERNAME': user_name,
+                'SECRET_HASH': self.__get_secret_hash(user_name),
             },
-            ClientId=self._client_id
+            ClientId=self._client_id,
         )
         session = response['Session']
         print("Auth initiated:", session)
@@ -115,17 +172,16 @@ class AuthenticationCognitoService:
             return e.response['Error']['Message']
 
 
-    def sign_up(self, username, password, email, phone_number, access):
+    def sign_up(self, email, phone_number):
         try:
             response = self._client.sign_up(
                 ClientId=self._client_id,
-                SecretHash=self.__get_secret_hash(username),
-                Username=username,
-                Password=password,
+                SecretHash=self.__get_secret_hash(email),
+                Username=email,
+                Password=self.generate_random_password(),
                 UserAttributes=[
                     {'Name': 'email', 'Value': email},
-                    {'Name': 'phone_number', 'Value': phone_number},  # Include phone number
-                    {'Name': 'custom:access', 'Value': json.dumps(access)}
+                    {'Name': 'phone_number', 'Value': phone_number}  # Include phone number
                 ]
             )
             return response
@@ -151,9 +207,9 @@ class AuthenticationCognitoService:
             ChallengeName='CUSTOM_CHALLENGE',
             Session=session_auth,
             ChallengeResponses={
-                'USERNAME': username,
+                'USERNAME': username,  # Ensure 'USERNAME' is included
                 'ANSWER': str(answer),
-                'SECRET_HASH': self.__get_secret_hash(username),
+                'SECRET_HASH': self.__get_secret_hash(username)
             }
         )
         # Check if the user is authenticated
